@@ -1,23 +1,18 @@
 
 import crypto from "crypto";
+import { spawn } from "child_process";
 import dotenv from "dotenv";
 
 import {
     oauthClient,
-    createOAuthClient,
+    requireGoogleOAuthConfig,
     GOOGLE_SCOPES,
     saveGoogleTokens,
     getGoogleAuth,
-    saveGoogleCloudOAuthTokens,
-    getGoogleCloudProjectByEmail
+    saveGoogleCloudOAuthTokens
 } from "./googleAuth.js";
 import { google } from "googleapis";
 import { setupGoogleCloudProject } from "./googleCloudProject.service.js";
-import {
-    openGoogleCloudWelcomePage,
-    enableGoogleChatApiInConsole,
-    fillOAuthPlaygroundScopes
-} from "./googleCloudConsole.service.js";
 
 dotenv.config();
 
@@ -103,6 +98,42 @@ const createState = (email) => {
         });
 };
 
+const SETUP_SCOPES = [
+    "openid",
+    "email",
+    "profile",
+    "https://www.googleapis.com/auth/cloud-platform",
+    "https://www.googleapis.com/auth/chat.spaces.readonly",
+    "https://www.googleapis.com/auth/chat.spaces.create"
+];
+
+const localCallbackUri = (req) => {
+    const host = String(req.get("host") || "");
+    if (!/^(localhost|127\.0\.0\.1):\d+$/.test(host)) {
+        return "";
+    }
+    return `http://${host}/auth/google/callback`;
+};
+
+const openAuthorizationUrl = (authUrl) => {
+    const parsed = new URL(authUrl);
+    if (parsed.protocol !== "https:" || parsed.hostname !== "accounts.google.com") {
+        return false;
+    }
+    const command =
+        process.platform === "win32"
+            ? { file: "rundll32.exe", args: ["url.dll,FileProtocolHandler", parsed.toString()] }
+            : process.platform === "darwin"
+              ? { file: "open", args: [parsed.toString()] }
+              : { file: "xdg-open", args: [parsed.toString()] };
+    const browser = spawn(command.file, command.args, {
+        detached: true,
+        stdio: "ignore"
+    });
+    browser.unref();
+    return true;
+};
+
 // Verify OAuth state
 const verifyState = (state) => {
     if (!state || typeof state !== "string") {
@@ -175,50 +206,45 @@ export const startGoogleCloudProjectOAuth = async (req, res) => {
         }
 
         const normalizedEmail = requestedEmail.trim().toLowerCase();
-        const existing = await getGoogleCloudProjectByEmail(normalizedEmail);
-
-        if (existing?.projectId) {
-            const chatApi = await enableGoogleChatApiInConsole(
-                normalizedEmail,
-                existing.projectId
-            );
-            const playground = await fillOAuthPlaygroundScopes(normalizedEmail);
-
-            return res.status(200).json({
-                success: true,
-                message: `Email ${normalizedEmail} is already stored. Google Chat API was ${chatApi.status} for project ${existing.projectId}. The refresh token and its expiry were saved for this email.`,
-                data: {
-                    email: normalizedEmail,
-                    projectId: existing.projectId,
-                    url: chatApi.url,
-                    chatApiStatus: chatApi.status,
-                    oauthPlaygroundUrl: playground.url,
-                    scopes: playground.scopes,
-                    refreshTokenExpiresIn: playground.refreshTokenExpiresIn,
-                    refreshTokenExpiresAt: playground.refreshTokenExpiresAt
-                }
+        const redirectUri = localCallbackUri(req);
+        if (!redirectUri) {
+            return res.status(400).json({
+                success: false,
+                message: "Open this API from http://localhost:9000 so Google can return to the app callback."
             });
         }
 
-        const opened = await openGoogleCloudWelcomePage(normalizedEmail);
-        const playground = await fillOAuthPlaygroundScopes(normalizedEmail);
+        requireGoogleOAuthConfig();
+        const setupClient = new google.auth.OAuth2(
+            process.env.GOOGLE_CLIENT_ID,
+            process.env.GOOGLE_CLIENT_SECRET,
+            redirectUri
+        );
+        const authUrl = setupClient.generateAuthUrl({
+            access_type: "offline",
+            prompt: "consent",
+            include_granted_scopes: true,
+            login_hint: normalizedEmail,
+            scope: SETUP_SCOPES,
+            state: signState({
+                flow: "cloud-project-setup",
+                email: normalizedEmail,
+                redirectUri,
+                nonce: crypto.randomBytes(16).toString("hex"),
+                expires: Date.now() + 10 * 60 * 1000
+            })
+        });
+        const browserOpened = openAuthorizationUrl(authUrl);
 
         return res.status(200).json({
             success: true,
-            message: `Create was clicked. Email ${normalizedEmail} and project ID ${opened.projectId} were stored. Google Chat API was ${opened.chatApiStatus}. The refresh token and its expiry were saved for this email.`,
+            message: "Google authorization opened. Allow access as the payload email. The callback saves the refresh token and enables the Chat API.",
             data: {
                 email: normalizedEmail,
-                url: opened.welcomeUrl,
-                projectPickerUrl: opened.projectPickerUrl,
-                projectCreateUrl: opened.projectCreateUrl,
-                apisUrl: opened.apisUrl,
-                chatApiStatus: opened.chatApiStatus,
-                projectName: opened.projectName,
-                projectId: opened.projectId,
-                oauthPlaygroundUrl: playground.url,
-                scopes: playground.scopes,
-                refreshTokenExpiresIn: playground.refreshTokenExpiresIn,
-                refreshTokenExpiresAt: playground.refreshTokenExpiresAt
+                authUrl,
+                redirectUri,
+                browser_opened: browserOpened,
+                scopes: SETUP_SCOPES
             }
         });
     } catch (error) {
@@ -327,7 +353,20 @@ export const googleAuthCallback = async (req, res) => {
         const stateData = verifyState(state);
 
         if (stateData.flow === "cloud-project-setup") {
-            const cloudAuth = createOAuthClient();
+            const redirectUri = String(stateData.redirectUri || "");
+            if (!/^http:\/\/(localhost|127\.0\.0\.1):\d+\/auth\/google\/callback$/.test(redirectUri)) {
+                throw new Error("OAuth callback address is not allowed.");
+            }
+            if (!stateData.email) {
+                throw new Error("OAuth state is missing the account email.");
+            }
+
+            requireGoogleOAuthConfig();
+            const cloudAuth = new google.auth.OAuth2(
+                process.env.GOOGLE_CLIENT_ID,
+                process.env.GOOGLE_CLIENT_SECRET,
+                redirectUri
+            );
             const { tokens } = await cloudAuth.getToken(code);
 
             if (!tokens.id_token) {
@@ -347,14 +386,37 @@ export const googleAuthCallback = async (req, res) => {
             if (!payload?.email_verified || !googleEmail) {
                 throw new Error("Google email is not verified.");
             }
+            if (googleEmail !== stateData.email) {
+                throw new Error(
+                    "Signed-in Google email does not match the requested email."
+                );
+            }
 
             await saveGoogleCloudOAuthTokens(googleEmail, tokens);
-            const result = await setupGoogleCloudProject(cloudAuth);
-            const apisUrl =
-                "https://console.cloud.google.com/apis/dashboard?project=" +
-                encodeURIComponent(result.projectId);
+            await saveGoogleTokens(googleEmail, tokens);
 
-            return res.redirect(302, apisUrl);
+            let setupError = "";
+            let result = null;
+            try {
+                result = await setupGoogleCloudProject(cloudAuth);
+            } catch (error) {
+                setupError = error.response?.data?.error?.message || error.message;
+            }
+
+            return res.status(200).send(`
+            <!DOCTYPE html>
+            <html>
+                <head><title>Google Chat setup</title></head>
+                <body style="font-family: Arial; text-align: center; padding: 50px;">
+                    <h2>Google account connected</h2>
+                    <p>Refresh token saved for ${googleEmail}.</p>
+                    <p>${result
+                        ? `Chat API is enabled on project ${result.projectId}.`
+                        : `Chat API was not enabled: ${setupError}`}</p>
+                    <p>You can close this window.</p>
+                </body>
+            </html>
+        `);
         }
 
         if (!stateData.email) {

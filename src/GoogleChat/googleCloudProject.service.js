@@ -14,7 +14,7 @@ const ENV_PATH = path.resolve(__dirname, "../../.env");
 
 const envResult = dotenv.config({ path: ENV_PATH });
 
-if (envResult.error) {
+if (envResult.error && envResult.error.code !== "ENOENT") {
   console.error("Unable to load .env file:", ENV_PATH);
   throw envResult.error;
 }
@@ -47,6 +47,12 @@ const generateProjectId = () => {
 };
 
 const persistProjectId = (projectId) => {
+  process.env.GOOGLE_CLOUD_PROJECT_ID = projectId;
+  PROJECT_ID = projectId;
+  if (!fs.existsSync(ENV_PATH)) {
+    return;
+  }
+
   let envContents = fs.readFileSync(ENV_PATH, "utf8");
   const projectIdLine =
     /^[ \t]*(?:export[ \t]+)?GOOGLE_CLOUD_PROJECT_ID[ \t]*=.*$/gm;
