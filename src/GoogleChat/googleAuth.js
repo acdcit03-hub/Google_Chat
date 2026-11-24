@@ -16,24 +16,31 @@ const pool = new Pool({
     password: process.env.DB_PASSWORD,
 });
 
-const ENCRYPTION_KEY = Buffer.from(
-    process.env.GOOGLE_TOKEN_ENCRYPTION_KEY || "",
-    "hex"
-);
+const cleanEnv = (value) =>
+    String(value || "")
+        .trim()
+        .replace(/^["']|["']$/g, "")
+        .trim();
 
-if (ENCRYPTION_KEY.length !== 32) {
-    throw new Error(
-        "GOOGLE_TOKEN_ENCRYPTION_KEY must contain exactly 64 hexadecimal characters."
-    );
-}
+const getEncryptionKey = () => {
+    const raw = cleanEnv(process.env.GOOGLE_TOKEN_ENCRYPTION_KEY);
+    if (!/^[0-9a-fA-F]{64}$/.test(raw)) {
+        throw new Error(
+            "GOOGLE_TOKEN_ENCRYPTION_KEY must contain exactly 64 hexadecimal characters."
+        );
+    }
+    return Buffer.from(raw, "hex");
+};
 
-const CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
-const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
-const REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI;
+const CLIENT_ID = cleanEnv(process.env.GOOGLE_CLIENT_ID);
+const CLIENT_SECRET = cleanEnv(process.env.GOOGLE_CLIENT_SECRET);
+const REDIRECT_URI = cleanEnv(process.env.GOOGLE_REDIRECT_URI);
 
-if (!CLIENT_ID || !CLIENT_SECRET || !REDIRECT_URI) {
-    throw new Error("Google OAuth environment variables are missing.");
-}
+export const requireGoogleOAuthConfig = () => {
+    if (!CLIENT_ID || !CLIENT_SECRET || !REDIRECT_URI) {
+        throw new Error("Google OAuth environment variables are missing.");
+    }
+};
 
 export const oauthClient = new google.auth.OAuth2(
     CLIENT_ID,
@@ -41,8 +48,10 @@ export const oauthClient = new google.auth.OAuth2(
     REDIRECT_URI
 );
 
-export const createOAuthClient = () =>
-    new google.auth.OAuth2(CLIENT_ID, CLIENT_SECRET, REDIRECT_URI);
+export const createOAuthClient = () => {
+    requireGoogleOAuthConfig();
+    return new google.auth.OAuth2(CLIENT_ID, CLIENT_SECRET, REDIRECT_URI);
+};
 
 export const GOOGLE_SCOPES = [
     "openid",
@@ -60,7 +69,7 @@ export const encryptToken = (value) => {
 
     const cipher = crypto.createCipheriv(
         "aes-256-gcm",
-        ENCRYPTION_KEY,
+        getEncryptionKey(),
         iv
     );
 
@@ -91,7 +100,7 @@ export const decryptToken = (encryptedValue) => {
 
     const decipher = crypto.createDecipheriv(
         "aes-256-gcm",
-        ENCRYPTION_KEY,
+        getEncryptionKey(),
         Buffer.from(ivHex, "hex")
     );
 
