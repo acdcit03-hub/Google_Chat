@@ -287,30 +287,35 @@ const sendGoogleChatError = (res, error) => {
     });
 };
 
+const missingTokenError = (message) => {
+    const error = new Error(message);
+    error.status = 404;
+    error.code = "GOOGLE_TOKEN_NOT_FOUND";
+    return error;
+};
+
 const loadUsableAccessToken = async (email) => {
-    const tokenRow = await loadToken(email);
+    const account = email || "";
+    const tokenRow = await loadToken(account);
     if (!tokenRow?.refresh_token_enc) {
-        const error = new Error(
-            email
-                ? "No refresh token is stored for this email."
-                : "No Google refresh token is stored."
-        );
-        error.status = 404;
-        error.code = "GOOGLE_TOKEN_NOT_FOUND";
-        throw error;
+        throw missingTokenError("Your token has expired. Generate it.");
     }
     if (
         tokenRow.refresh_token_expires_at &&
         new Date(tokenRow.refresh_token_expires_at).getTime() <= Date.now()
     ) {
-        const error = new Error("The refresh token for this email has expired.");
+        const error = new Error(
+            "Your token has expired. Generate it."
+        );
         error.status = 403;
         error.code = "GOOGLE_REFRESH_EXPIRED";
         throw error;
     }
     const refreshToken = readRefreshToken(tokenRow.refresh_token_enc);
     if (!refreshToken.startsWith("1//")) {
-        const error = new Error("The stored refresh token for this email is not usable.");
+        const error = new Error(
+            "Your token has expired. Generate it."
+        );
         error.status = 403;
         error.code = "GOOGLE_REFRESH_FAILED";
         throw error;

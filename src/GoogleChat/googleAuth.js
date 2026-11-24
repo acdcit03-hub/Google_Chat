@@ -133,12 +133,52 @@ export const initializeGoogleOAuthTokensTable = async () => {
 
     await pool.query(`
         CREATE TABLE IF NOT EXISTS google_cloud_oauth_tokens (
-            id SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
-            google_email VARCHAR(255) NOT NULL,
+            id BIGSERIAL PRIMARY KEY,
+            google_email VARCHAR(255) NOT NULL UNIQUE,
             refresh_token_enc TEXT NOT NULL,
             scopes TEXT[] DEFAULT ARRAY[]::TEXT[],
             updated_at TIMESTAMPTZ DEFAULT NOW()
         );
+    `);
+
+    await pool.query(`
+        ALTER TABLE google_cloud_oauth_tokens
+        DROP CONSTRAINT IF EXISTS google_cloud_oauth_tokens_id_check
+    `);
+    await pool.query(`
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_name = 'google_cloud_oauth_tokens'
+                  AND column_name = 'id'
+                  AND data_type = 'smallint'
+            ) THEN
+                ALTER TABLE google_cloud_oauth_tokens
+                    DROP CONSTRAINT IF EXISTS google_cloud_oauth_tokens_pkey;
+                ALTER TABLE google_cloud_oauth_tokens
+                    ALTER COLUMN id DROP DEFAULT;
+                ALTER TABLE google_cloud_oauth_tokens
+                    ALTER COLUMN id TYPE BIGINT;
+                CREATE SEQUENCE IF NOT EXISTS google_cloud_oauth_tokens_id_seq;
+                ALTER TABLE google_cloud_oauth_tokens
+                    ALTER COLUMN id SET DEFAULT nextval('google_cloud_oauth_tokens_id_seq');
+                ALTER SEQUENCE google_cloud_oauth_tokens_id_seq
+                    OWNED BY google_cloud_oauth_tokens.id;
+                PERFORM setval(
+                    'google_cloud_oauth_tokens_id_seq',
+                    COALESCE((SELECT MAX(id) FROM google_cloud_oauth_tokens), 0) + 1,
+                    false
+                );
+                ALTER TABLE google_cloud_oauth_tokens
+                    ADD PRIMARY KEY (id);
+            END IF;
+        END $$
+    `);
+    await pool.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS google_cloud_oauth_tokens_google_email_key
+        ON google_cloud_oauth_tokens (google_email)
     `);
 
     await pool.query(`
@@ -165,38 +205,35 @@ export const initializeGoogleOAuthTokensTable = async () => {
 };
 
 export const saveGoogleCloudOAuthTokens = async (email, tokens) => {
+    const googleEmail = email.trim().toLowerCase();
     const refreshToken = tokens.refresh_token;
-    let existingRefreshToken;
+    let storedRefreshToken = refreshToken ? storeRefreshToken(refreshToken) : null;
 
-    if (!refreshToken) {
+    if (!storedRefreshToken) {
         const existing = await pool.query(
-            "SELECT google_email, refresh_token_enc FROM google_cloud_oauth_tokens WHERE id = 1"
+            `SELECT refresh_token_enc
+             FROM google_cloud_oauth_tokens
+             WHERE google_email = $1`,
+            [googleEmail]
         );
 
-        if (
-            existing.rowCount === 0 ||
-            existing.rows[0].google_email !== email.trim().toLowerCase()
-        ) {
+        if (existing.rowCount === 0) {
             throw new Error(
                 "Google did not return a refresh token. Reauthorize and grant consent."
             );
         }
 
-        existingRefreshToken = existing.rows[0].refresh_token_enc;
+        storedRefreshToken = existing.rows[0].refresh_token_enc;
     }
 
     const scopes = tokens.scope ? tokens.scope.split(" ") : [];
-    const encryptedRefreshToken = refreshToken
-        ? storeRefreshToken(refreshToken)
-        : existingRefreshToken;
 
     await pool.query(
         `INSERT INTO google_cloud_oauth_tokens (
-            id, google_email, refresh_token_enc, scopes, updated_at
+            google_email, refresh_token_enc, scopes, updated_at
         )
-        VALUES (1, $1, $2, $3, NOW())
-        ON CONFLICT (id) DO UPDATE SET
-            google_email = EXCLUDED.google_email,
+        VALUES ($1, $2, $3, NOW())
+        ON CONFLICT (google_email) DO UPDATE SET
             refresh_token_enc = COALESCE(
                 EXCLUDED.refresh_token_enc,
                 google_cloud_oauth_tokens.refresh_token_enc
@@ -207,11 +244,7 @@ export const saveGoogleCloudOAuthTokens = async (email, tokens) => {
                 ELSE google_cloud_oauth_tokens.scopes
             END,
             updated_at = NOW()`,
-        [
-            email.trim().toLowerCase(),
-            encryptedRefreshToken,
-            scopes
-        ]
+        [googleEmail, storedRefreshToken, scopes]
     );
 };
 
@@ -255,20 +288,25 @@ export const saveGoogleCloudProject = async (email, projectId) => {
     );
 };
 
-export const getGoogleCloudOAuthRefreshToken = async () => {
+export const getGoogleCloudOAuthRefreshToken = async (email) => {
+    const googleEmail = String(email || "").trim().toLowerCase();
     const result = await pool.query(
         `SELECT google_email, refresh_token_enc
          FROM google_cloud_oauth_tokens
-         WHERE id = 1`
+         WHERE ($1 = '' OR google_email = $1)
+         ORDER BY updated_at DESC NULLS LAST
+         LIMIT 1`,
+        [googleEmail]
     );
 
     if (result.rowCount === 0) {
         return null;
     }
 
+    const stored = String(result.rows[0].refresh_token_enc || "");
     return {
         email: result.rows[0].google_email,
-        refreshToken: decryptToken(result.rows[0].refresh_token_enc)
+        refreshToken: stored.startsWith("1//") ? stored : decryptToken(stored)
     };
 };
 
