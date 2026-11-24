@@ -423,6 +423,9 @@ const enableGoogleChatAPI = async (client, projectId) => {
   };
 };
 
+export const enableChatApiForProject = (client, projectId) =>
+  enableGoogleChatAPI(client, projectId);
+
 // Main setup function.
 export const setupGoogleCloudProject = async (authenticatedClient = null) => {
   const client = authenticatedClient || await getGoogleCloudClient();

@@ -9,10 +9,11 @@ import {
     GOOGLE_SCOPES,
     saveGoogleTokens,
     getGoogleAuth,
-    saveGoogleCloudOAuthTokens
+    saveGoogleCloudOAuthTokens,
+    getGoogleCloudProjectByEmail
 } from "./googleAuth.js";
 import { google } from "googleapis";
-import { setupGoogleCloudProject } from "./googleCloudProject.service.js";
+import { setupGoogleCloudProject, enableChatApiForProject } from "./googleCloudProject.service.js";
 
 dotenv.config();
 
@@ -107,13 +108,20 @@ const SETUP_SCOPES = [
     "https://www.googleapis.com/auth/chat.spaces.create"
 ];
 
-const localCallbackUri = (req) => {
-    const host = String(req.get("host") || "");
-    if (!/^(localhost|127\.0\.0\.1):\d+$/.test(host)) {
-        return "";
+const callbackUri = (req) => {
+    const host = String(req.get("host") || "").split(",")[0].trim();
+    if (/^(localhost|127\.0\.0\.1):\d+$/.test(host)) {
+        return `http://${host}/auth/google/callback`;
     }
-    return `http://${host}/auth/google/callback`;
+    if (/^[a-z0-9-]+\.onrender\.com$/i.test(host)) {
+        return `https://${host}/auth/google/callback`;
+    }
+    return "";
 };
+
+const isAllowedCallbackUri = (uri) =>
+    /^http:\/\/(localhost|127\.0\.0\.1):\d+\/auth\/google\/callback$/.test(uri) ||
+    /^https:\/\/[a-z0-9-]+\.onrender\.com\/auth\/google\/callback$/i.test(uri);
 
 const openAuthorizationUrl = (authUrl) => {
     const parsed = new URL(authUrl);
@@ -178,23 +186,7 @@ const verifyState = (state) => {
     return data;
 };
 
-const isLocalRequest = (req) => {
-    const address = (req.socket.remoteAddress || "").replace(
-        /^::ffff:/,
-        ""
-    );
-
-    return address === "127.0.0.1" || address === "::1";
-};
-
 export const startGoogleCloudProjectOAuth = async (req, res) => {
-    if (!isLocalRequest(req)) {
-        return res.status(403).json({
-            success: false,
-            message: "Google Cloud project setup can only be started locally."
-        });
-    }
-
     try {
         const requestedEmail = req.body?.email ?? req.query?.email;
 
@@ -206,11 +198,11 @@ export const startGoogleCloudProjectOAuth = async (req, res) => {
         }
 
         const normalizedEmail = requestedEmail.trim().toLowerCase();
-        const redirectUri = localCallbackUri(req);
+        const redirectUri = callbackUri(req);
         if (!redirectUri) {
             return res.status(400).json({
                 success: false,
-                message: "Open this API from http://localhost:9000 so Google can return to the app callback."
+                message: "This host cannot be used as the Google OAuth callback."
             });
         }
 
@@ -354,7 +346,7 @@ export const googleAuthCallback = async (req, res) => {
 
         if (stateData.flow === "cloud-project-setup") {
             const redirectUri = String(stateData.redirectUri || "");
-            if (!/^http:\/\/(localhost|127\.0\.0\.1):\d+\/auth\/google\/callback$/.test(redirectUri)) {
+            if (!isAllowedCallbackUri(redirectUri)) {
                 throw new Error("OAuth callback address is not allowed.");
             }
             if (!stateData.email) {
@@ -398,7 +390,19 @@ export const googleAuthCallback = async (req, res) => {
             let setupError = "";
             let result = null;
             try {
-                result = await setupGoogleCloudProject(cloudAuth);
+                const savedProject = await getGoogleCloudProjectByEmail(googleEmail);
+                if (savedProject?.projectId) {
+                    const chatApi = await enableChatApiForProject(
+                        cloudAuth,
+                        savedProject.projectId
+                    );
+                    result = {
+                        projectId: savedProject.projectId,
+                        chatApi
+                    };
+                } else {
+                    result = await setupGoogleCloudProject(cloudAuth);
+                }
             } catch (error) {
                 setupError = error.response?.data?.error?.message || error.message;
             }
