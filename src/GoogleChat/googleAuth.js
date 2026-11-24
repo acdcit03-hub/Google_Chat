@@ -1,20 +1,10 @@
 
-import pg from "pg";
 import crypto from "crypto";
 import dotenv from "dotenv";
 import { google } from "googleapis";
+import { pool } from "../config/db.js";
 
 dotenv.config();
-
-const { Pool } = pg;
-
-const pool = new Pool({
-    host: process.env.DB_HOST,
-    port: Number(process.env.DB_PORT || 5432),
-    database: process.env.DB_NAME,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-});
 
 const cleanEnv = (value) =>
     String(value || "")
