@@ -124,6 +124,9 @@ const isAllowedCallbackUri = (uri) =>
     /^https:\/\/[a-z0-9-]+\.onrender\.com\/auth\/google\/callback$/i.test(uri);
 
 const openAuthorizationUrl = (authUrl) => {
+    if (process.platform !== "win32" && process.platform !== "darwin") {
+        return false;
+    }
     const parsed = new URL(authUrl);
     if (parsed.protocol !== "https:" || parsed.hostname !== "accounts.google.com") {
         return false;
@@ -230,7 +233,9 @@ export const startGoogleCloudProjectOAuth = async (req, res) => {
 
         return res.status(200).json({
             success: true,
-            message: "Google authorization opened. Allow access as the payload email. The callback saves the refresh token and enables the Chat API.",
+            message: browserOpened
+                ? "Google authorization opened. Allow access as the payload email. The callback saves the refresh token."
+                : "Open authUrl in your browser and allow access. The refresh token is saved only after Google returns to the callback.",
             data: {
                 email: normalizedEmail,
                 authUrl,

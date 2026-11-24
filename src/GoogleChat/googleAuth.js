@@ -12,6 +12,20 @@ const cleanEnv = (value) =>
         .replace(/^["']|["']$/g, "")
         .trim();
 
+const canEncryptTokens = () =>
+    /^[0-9a-fA-F]{64}$/.test(cleanEnv(process.env.GOOGLE_TOKEN_ENCRYPTION_KEY));
+
+const storeRefreshToken = (value) => {
+    if (!value) return null;
+    if (String(value).startsWith("1//")) return value;
+    return encryptToken(value);
+};
+
+const storeAccessToken = (value) => {
+    if (!value || !canEncryptTokens()) return null;
+    return encryptToken(value);
+};
+
 const getEncryptionKey = () => {
     const raw = cleanEnv(process.env.GOOGLE_TOKEN_ENCRYPTION_KEY);
     if (!/^[0-9a-fA-F]{64}$/.test(raw)) {
@@ -173,7 +187,7 @@ export const saveGoogleCloudOAuthTokens = async (email, tokens) => {
 
     const scopes = tokens.scope ? tokens.scope.split(" ") : [];
     const encryptedRefreshToken = refreshToken
-        ? encryptToken(refreshToken)
+        ? storeRefreshToken(refreshToken)
         : existingRefreshToken;
 
     await pool.query(
@@ -262,11 +276,9 @@ export const getGoogleCloudOAuthRefreshToken = async () => {
 export const saveGoogleTokens = async (email, tokens) => {
     const googleEmail = email.trim().toLowerCase();
 
-    const encryptedAccessToken = encryptToken(tokens.access_token);
+    const encryptedAccessToken = storeAccessToken(tokens.access_token);
 
-    const encryptedRefreshToken = tokens.refresh_token?.startsWith("1//")
-        ? tokens.refresh_token
-        : encryptToken(tokens.refresh_token);
+    const encryptedRefreshToken = storeRefreshToken(tokens.refresh_token);
 
     const expiry = tokens.expiry_date
         ? new Date(tokens.expiry_date)
