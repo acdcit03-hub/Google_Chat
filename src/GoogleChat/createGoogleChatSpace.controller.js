@@ -163,12 +163,14 @@ const openSpaceUri = (spaceUri) => {
         return false;
     }
 
+    if (process.platform !== "win32" && process.platform !== "darwin") {
+        return false;
+    }
+
     const command =
         process.platform === "win32"
             ? { file: "rundll32.exe", args: ["url.dll,FileProtocolHandler", parsed.toString()] }
-            : process.platform === "darwin"
-              ? { file: "open", args: [parsed.toString()] }
-              : { file: "xdg-open", args: [parsed.toString()] };
+            : { file: "open", args: [parsed.toString()] };
 
     const browser = spawn(command.file, command.args, {
         detached: true,
@@ -349,8 +351,12 @@ export const createGoogleChatSpace = async (req, res) => {
         return res.status(existing ? 200 : 201).json({
             success: true,
             message: existing
-                ? "Google Chat space opened"
-                : "Google Chat space created",
+                ? openedInBrowser
+                    ? "Google Chat space opened"
+                    : "Google Chat space found. Open space_uri in your browser."
+                : openedInBrowser
+                  ? "Google Chat space created"
+                  : "Google Chat space created. Open space_uri in your browser.",
             data: {
                 ...spacePayload(space, spaceName, existing ? "opened" : "created"),
                 browser_opened: openedInBrowser
@@ -402,8 +408,12 @@ export const openEmployeeGoogleChat = async (req, res) => {
         return res.status(existing ? 200 : 201).json({
             success: true,
             message: existing
-                ? "Google Chat opened"
-                : "Google Chat direct message created",
+                ? openedInBrowser
+                    ? "Google Chat opened"
+                    : "Google Chat found. Open space_uri in your browser."
+                : openedInBrowser
+                  ? "Google Chat direct message created"
+                  : "Google Chat direct message created. Open space_uri in your browser.",
             data: {
                 username,
                 work_email: workEmail,
