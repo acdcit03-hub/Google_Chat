@@ -99,8 +99,8 @@ import { startUserSessionExpiryCheck } from './controllers/users/userSession.con
 import { startTaskAutoStartCheck } from './controllers/timesheet/task.controller.js';
 import { initializeCompanyBankDetailsLogTable, initializeCompanyBankTable } from './models/Payroll/companyBank.model.js';
 import { initializePayrollSettingsDownloadLogsTable } from './models/Payroll/payrollSettingsDownloadLog.model.js';
-import googleAuthRoutes from "./GoogleChat/googleAuthRoutes.js";
-import { initializeGoogleOAuthTokensTable } from "./GoogleChat/googleAuth.js";
+import googleAuthRoutes from "./routes/GoogleChat/googleAuth.routes.js";
+import { initializeGoogleOAuthTokensTable } from "./models/GoogleChat/googleOAuthToken.model.js";
 
 const app = express();
 const server = http.createServer(app);

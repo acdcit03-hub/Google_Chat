@@ -1535,3 +1535,25 @@ export const getEmployeeByUsername = async (username) => {
 
     return rows[0] || null;
 };
+
+export const findWorkEmailByUsername = async (username) => {
+    const result = await pool.query(
+        `
+        SELECT NULLIF(TRIM(ed.work_email), '') AS work_email
+        FROM employment_details ed
+        LEFT JOIN personal_details pd
+            ON pd.id = ed.personal_details_id
+        WHERE LOWER(TRIM(COALESCE(ed.username, pd.username, '')))
+            = LOWER(TRIM($1))
+        ORDER BY
+            CASE
+                WHEN NULLIF(TRIM(ed.work_email), '') IS NULL THEN 1
+                ELSE 0
+            END,
+        ed.updated_at DESC NULLS LAST
+        LIMIT 1
+        `,
+        [username]
+    );
+    return result.rows[0]?.work_email || "";
+};
